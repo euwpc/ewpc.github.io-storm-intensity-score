@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Weather Intensity Score — Demo</title>
+<link rel="preconnect" href="https://fonts.gstatic.com">
+<style>
+  :root{
+    --bg:#071017; --card:#0f1b22; --muted:#9aa3ad; --accent:#ff6b2d; --accent2:#ffcc00;
+    --good:#2ec4b6; --warn:#ff8c42; --danger:#e64545;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; font-family:Inter,Segoe UI,system-ui,Arial; background:linear-gradient(180deg,#021016 0%, #06121a 100%); color:#e6eef0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:28px}
+  .app{width:100%;max-width:940px}
+  .header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+  h1{font-size:1.1rem;margin:0;color:#dff6ef}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  input,select,button{padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:#071018;color:inherit}
+  button{cursor:pointer;background:var(--accent);color:#081014;border:none;font-weight:700}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border:1px solid rgba(255,255,255,0.03);padding:18px;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,0.6)}
+  .row{display:flex;gap:18px;align-items:center}
+  .left{flex:1}
+  .right{width:360px}
+  .score-box{display:flex;align-items:center;gap:16px}
+  .big-score{font-size:48px;font-weight:800;letter-spacing:0.5px}
+  .sub{color:var(--muted);font-size:0.9rem}
+  .bar-wrap{height:36px;border-radius:10px;background:#071014;border:1px solid rgba(255,255,255,0.03);padding:4px;display:flex;align-items:center}
+  .bar{height:28px;border-radius:8px;flex:1;position:relative;overflow:hidden;background:linear-gradient(90deg,#2ec4b6 0%, #ffcc00 50%, #e64545 100%)}
+  .bar-indicator{position:absolute;top:0;left:0;height:100%;background:rgba(0,0,0,0.25);backdrop-filter:blur(2px)}
+  .bar-labels{display:flex;justify-content:space-between;margin-top:8px;font-size:0.85rem;color:var(--muted)}
+  .spark{width:100%;height:40px}
+  .meta{margin-top:10px;color:var(--muted);font-size:0.9rem}
+  .footer{margin-top:12px;color:var(--muted);font-size:0.9rem}
+  .chip{background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:8px;font-weight:600}
+  .status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  /* tune small screens */
+  @media (max-width:920px){ .right{width:100%} .row{flex-direction:column;align-items:stretch} .score-box{justify-content:space-between} .big-score{font-size:36px}}
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <h1>Weather Intensity Score — Demo</h1>
+      <div class="controls">
+        <input id="labelInput" placeholder="Region name (optional)" style="min-width:200px" />
+        <input id="latInput" placeholder="Latitude" value="59.4370" style="width:110px" />
+        <input id="lonInput" placeholder="Longitude" value="24.7536" style="width:110px" />
+        <button id="refreshBtn">Update now</button>
+      </div>
+    </div>
+
+    <div class="card" role="region" aria-label="Weather intensity">
+      <div class="row">
+        <div class="left">
+          <div class="score-box">
+            <div>
+              <div class="big-score" id="scoreVal">—</div>
+              <div class="sub" id="scoreLabel">Loading…</div>
+            </div>
+            <div style="flex:1">
+              <div class="bar-wrap" aria-hidden="true">
+                <div class="bar" id="spectrumBar">
+                  <div class="bar-indicator" id="barIndicator" style="width:0%"></div>
+                </div>
+              </div>
+              <div class="bar-labels">
+                <div>Quiet</div>
+                <div>Active</div>
+                <div>Extreme</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="meta" id="metaText">—</div>
+        </div>
+
+        <div class="right">
+          <canvas id="spark" class="spark" width="360" height="40" style="background:transparent;border-radius:6px"></canvas>
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+            <div class="chip" id="windChip">Wind: —</div>
+            <div class="chip" id="presChip">Pressure: —</div>
+            <div class="chip" id="precipChip">Precip: —</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">Source: <strong>Open-Meteo</strong>. This is a derived index for demonstration — tune weights in code. Data updates every 15 minutes.</div>
+    </div>
+  </div>
+
+<script>
+/*
+  Client-only Weather Intensity Score demo using Open-Meteo
+  - Edit weights here if you want different sensitivity
+*/
+const CONFIG = {
+  OPEN_METEO_BASE: 'https://api.open-meteo.com/v1/forecast',
+  // Score parameters (tweak as needed)
+  P_REF: 1015,             // reference pressure (hPa)
+  WEIGHT_PRESSURE: 1.8,    // per hPa
+  WEIGHT_WIND: 0.9,        // per km/h
+  WEIGHT_PRECIP: 1.4,      // per mm/hr
+  UPDATE_MINUTES: 15       // auto-update interval
+};
+
+// DOM
+const latInput = document.getElementById('latInput');
+const lonInput = document.getElementById('lonInput');
+const labelInput = document.getElementById('labelInput');
+const refreshBtn = document.getElementById('refreshBtn');
+
+const scoreVal = document.getElementById('scoreVal');
+const scoreLabel = document.getElementById('scoreLabel');
+const metaText = document.getElementById('metaText');
+const windChip = document.getElementById('windChip');
+const presChip = document.getElementById('presChip');
+const precipChip = document.getElementById('precipChip');
+const barIndicator = document.getElementById('barIndicator');
+const sparkCanvas = document.getElementById('spark');
+const sparkCtx = sparkCanvas.getContext('2d');
+
+let historyScores = []; // last N scores
+
+refreshBtn.addEventListener('click', () => fetchAndUpdate(true));
+
+async function fetchAndUpdate(force=false){
+  const lat = parseFloat(latInput.value);
+  const lon = parseFloat(lonInput.value);
+  if (Number.isNaN(lat) || Number.isNaN(lon)) { alert('Please enter valid lat/lon'); return; }
+
+  // Build Open-Meteo request for hourly timeseries including pressure_msl, windspeed_10m, precipitation
+  // timezone=UTC so indexing is simple
+  const url = new URL(CONFIG.OPEN_METEO_BASE);
+  url.searchParams.set('latitude', lat);
+  url.searchParams.set('longitude', lon);
+  url.searchParams.set('hourly', 'pressure_msl,windspeed_10m,precipitation');
+  url.searchParams.set('timezone', 'UTC');
+
+  try {
+    const resp = await fetch(url.toString(), {cache: 'no-cache'});
+    if (!resp.ok) throw new Error('Open-Meteo error ' + resp.status);
+    const data = await resp.json();
+
+    // find latest hour index
+    const times = data.hourly.time || [];
+    if (!times.length) throw new Error('No hourly data');
+    const now = new Date();
+    // Find closest hour index (UTC)
+    const nowUtcIso = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours())).toISOString().slice(0,13)+':00';
+    let idx = times.indexOf(nowUtcIso);
+    if (idx === -1) {
+      // fallback: use last available index
+      idx = times.length - 1;
+    }
+
+    // Read variables
+    const pressure = (data.hourly.pressure_msl && data.hourly.pressure_msl[idx] != null) ? Number(data.hourly.pressure_msl[idx]) : null;
+    const wind_m_s = (data.hourly.windspeed_10m && data.hourly.windspeed_10m[idx] != null) ? Number(data.hourly.windspeed_10m[idx]) : null;
+    const precip = (data.hourly.precipitation && data.hourly.precipitation[idx] != null) ? Number(data.hourly.precipitation[idx]) : 0;
+
+    // Convert units
+    // Open-Meteo windspeed_10m is m/s — convert to km/h
+    const wind_kmh = wind_m_s != null ? (wind_m_s * 3.6) : null;
+    const pressure_hpa = pressure; // already hPa
+    const precip_mm_hr = precip; // mm for hourly precipitation rate (approx)
+
+    // Compute score using weights
+    const pterm = pressure_hpa != null ? Math.max(0, (CONFIG.P_REF - pressure_hpa)) * CONFIG.WEIGHT_PRESSURE : 0;
+    const wterm = wind_kmh != null ? (wind_kmh * CONFIG.WEIGHT_WIND) : 0;
+    const prterm = precip_mm_hr != null ? (precip_mm_hr * CONFIG.WEIGHT_PRECIP) : 0;
+
+    const rawScore = +(pterm + wterm + prterm).toFixed(2);
+
+    // update history (keep last 24)
+    historyScores.push({t: new Date().toISOString(), v: rawScore});
+    if (historyScores.length > 24) historyScores.shift();
+
+    // Render
+    renderScore(rawScore, {pressure_hpa, wind_kmh, precip_mm_hr});
+  } catch (err) {
+    console.error(err);
+    scoreVal.textContent = 'Error';
+    scoreLabel.textContent = 'Could not load data';
+    metaText.textContent = err.message || '';
+  }
+}
+
+function renderScore(score, {pressure_hpa, wind_kmh, precip_mm_hr}){
+  scoreVal.textContent = score.toFixed(2);
+  // label & color class
+  let label='Quiet', color='var(--good)';
+  if (score >= 120) { label='Extreme'; color='var(--danger)'; }
+  else if (score >= 40) { label='Active'; color='var(--warn)'; }
+  scoreLabel.innerHTML = `<span style="display:inline-block;margin-right:8px" class="status-dot" id="dot" style="background:${color}"></span> ${label}`;
+
+  // meta
+  const regionName = labelInput.value.trim() ? ('Region: ' + labelInput.value.trim()) : 'Center: ' + latInput.value + ',' + lonInput.value;
+  metaText.textContent = `${regionName} • last update: ${new Date().toLocaleString()}`;
+
+  windChip.textContent = wind_kmh != null ? `Wind: ${wind_kmh.toFixed(0)} km/h` : 'Wind: —';
+  presChip.textContent = pressure_hpa != null ? `Pressure: ${pressure_hpa.toFixed(0)} hPa` : 'Pressure: —';
+  precipChip.textContent = `Precip: ${precip_mm_hr != null ? precip_mm_hr.toFixed(1) : '0.0'} mm`;
+
+  // move indicator along a 0..200+ score range, clamp to [0,100]%
+  const maxScale = 180; // scale used for progress percent (tweak)
+  const pct = Math.min(100, Math.round((score / maxScale) * 100));
+  barIndicator.style.width = pct + '%';
+  // barIndicator tint depending on category
+  if (score >= 120) barIndicator.style.background = 'rgba(230,69,69,0.85)';
+  else if (score >= 40) barIndicator.style.background = 'rgba(255,140,66,0.85)';
+  else barIndicator.style.background = 'rgba(46,196,182,0.85)';
+
+  drawSpark(historyScores.map(s=>s.v));
+}
+
+/* simple sparkline */
+function drawSpark(values){
+  const w = sparkCanvas.width;
+  const h = sparkCanvas.height;
+  sparkCtx.clearRect(0,0,w,h);
+
+  if (!values || values.length===0) {
+    // empty placeholder
+    sparkCtx.fillStyle = 'rgba(255,255,255,0.03)';
+    sparkCtx.fillRect(0,0,w,h);
+    return;
+  }
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const range = Math.max(0.01, max - min);
+  sparkCtx.lineWidth = 2;
+  // gradient stroke
+  const grad = sparkCtx.createLinearGradient(0,0,w,0);
+  grad.addColorStop(0,'#00d1b2'); grad.addColorStop(0.6,'#ffdd57'); grad.addColorStop(1,'#ff6b6b');
+  sparkCtx.strokeStyle = grad;
+  sparkCtx.beginPath();
+  for (let i=0;i<values.length;i++){
+    const x = (i/(values.length-1 || 1)) * (w - 6) + 3;
+    const y = h - 6 - ((values[i] - min) / range) * (h - 12);
+    if (i===0) sparkCtx.moveTo(x,y); else sparkCtx.lineTo(x,y);
+  }
+  sparkCtx.stroke();
+
+  // fill under curve slightly
+  sparkCtx.globalAlpha = 0.08;
+  sparkCtx.fillStyle = '#00d1b2';
+  sparkCtx.beginPath();
+  for (let i=0;i<values.length;i++){
+    const x = (i/(values.length-1 || 1)) * (w - 6) + 3;
+    const y = h - 6 - ((values[i] - min) / range) * (h - 12);
+    if (i===0) sparkCtx.moveTo(x,y); else sparkCtx.lineTo(x,y);
+  }
+  sparkCtx.lineTo(w-3,h-4); sparkCtx.lineTo(3,h-4);
+  sparkCtx.closePath();
+  sparkCtx.fill();
+  sparkCtx.globalAlpha = 1.0;
+}
+
+/* start and schedule updates */
+fetchAndUpdate();
+setInterval(fetchAndUpdate, CONFIG.UPDATE_MINUTES * 60 * 1000);
+</script>
+</body>
+</html>
