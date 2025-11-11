@@ -1,92 +1,137 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Regional Weather Intensity Score</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Weather Intensity Score</title>
+<link rel="preconnect" href="https://fonts.gstatic.com">
 <style>
-body { font-family: Arial, sans-serif; background:#0d1117; color:white; text-align:center; }
-h1 { margin-top:20px; }
-#score { font-size:80px; font-weight:700; margin:20px 0; }
-#category { font-size:28px; margin-bottom:30px; font-weight:600; }
-#chart { width:80%; height:200px; margin:0 auto; }
+  :root{
+    --bg:#071017; --card:#0f1b22; --muted:#9aa3ad;
+    --quiet:#4DB6FF; --unsettled:#00E676; --active:#FFB300;
+    --strong:#FB8C00; --severe:#E53935; --extreme:#7B1FA2;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,Segoe UI,Arial;background:#03090d;color:#e6eef0;padding:28px;display:flex;justify-content:center}
+  .app{width:100%;max-width:940px;display:flex;flex-direction:column;gap:28px}
+  h1{font-size:1.2rem;margin:0 0 8px}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+  input,button{padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);background:#071018;color:#e6eef0}
+  button{cursor:pointer;background:#ff6b2d;border:none;font-weight:700}
+  .card{background:#0f1b22;border-radius:14px;padding:18px;border:1px solid rgba(255,255,255,0.05);}
+  .score-box{display:flex;align-items:center;gap:16px}
+  .big-score{font-size:46px;font-weight:800}
+  .bar-wrap{height:36px;border-radius:10px;background:#071014;border:1px solid rgba(255,255,255,0.04);padding:4px;display:flex;align-items:center;flex:1}
+  .bar{height:28px;border-radius:8px;flex:1;position:relative;background:linear-gradient(90deg,#4DB6FF 0%,#00E676 20%,#FFB300 40%,#FB8C00 60%,#E53935 80%,#7B1FA2 100%)}
+  .bar-indicator{position:absolute;top:0;left:0;height:100%;background:rgba(0,0,0,0.3);width:0%}
+  .chips{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .chip{background:rgba(255,255,255,0.05);padding:6px 8px;border-radius:8px;font-size:0.9rem}
+  .meta{margin-top:10px;color:var(--muted);font-size:0.9rem}
 </style>
 </head>
 <body>
+<div class="app">
 
-<h1>Regional Weather Intensity Score</h1>
-<div id="score">--</div>
-<div id="category">Loading...</div>
+  <!-- PANEL A — USER LOCATION SCORE -->
+  <div>
+    <h1>Weather Intensity Score — Your Location</h1>
+    <div class="controls">
+      <input id="labelInput" placeholder="Region label (optional)" />
+      <input id="latInput" placeholder="Latitude" value="59.4370" />
+      <input id="lonInput" placeholder="Longitude" value="24.7536" />
+      <button id="refreshA">Update</button>
+    </div>
 
-<canvas id="chart"></canvas>
+    <div class="card">
+      <div class="score-box">
+        <div class="big-score" id="scoreA">—</div>
+        <div class="bar-wrap"><div class="bar"><div class="bar-indicator" id="barA"></div></div></div>
+      </div>
+      <div class="chips">
+        <div class="chip" id="windA">Wind: —</div>
+        <div class="chip" id="presA">Pressure: —</div>
+        <div class="chip" id="precA">Precip: —</div>
+      </div>
+      <div class="meta" id="metaA">—</div>
+    </div>
+  </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- PANEL B — FIXED REGION BOX SCORE -->
+  <div>
+    <h1>Weather Intensity Score — Regional System (Auto-Area)</h1>
+    <div class="card">
+      <div class="score-box">
+        <div class="big-score" id="scoreB">—</div>
+        <div class="bar-wrap"><div class="bar"><div class="bar-indicator" id="barB"></div></div></div>
+      </div>
+      <div class="chips">
+        <div class="chip" id="windB">Avg Wind: —</div>
+        <div class="chip" id="presB">Avg Pressure: —</div>
+        <div class="chip" id="precB">Avg Precip: —</div>
+      </div>
+      <div class="meta" id="metaB">Tracking fixed area (Baltic/EE region box)</div>
+    </div>
+  </div>
+
+</div>
+
 <script>
-const box = {
-  top: 62.58,
-  left: 49.42,
-  bottom: 37.12,
-  right: 37.28
-};
+const API = "https://api.open-meteo.com/v1/forecast";
+const REF = 1015;
+const W_PRESS = 0.8, W_WIND = 1.2, W_PREC = 4;
 
-// Generate sample points (5x5 grid = 25 locations)
-const points = [];
-for (let i = 0; i < 5; i++) {
-  for (let j = 0; j < 5; j++) {
-    points.push({
-      lat: box.top - i * ((box.top - box.bottom) / 4),
-      lon: box.left - j * ((box.left - box.right) / 4)
-    });
-  }
-}
-
-let chart = new Chart(document.getElementById("chart"), {
-  type: 'line',
-  data: { labels: [], datasets: [{ data: [] }] },
-  options: { responsive: true, plugins: { legend: { display:false } } }
-});
-
-async function fetchPointScore(lat, lon) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=wind_speed_10m,precipitation,pressure_msl`;
-  const r = await fetch(url);
+// PANEL A update
+async function getPoint(lat,lon){
+  const r = await fetch(`${API}?latitude=${lat}&longitude=${lon}&hourly=pressure_msl,windspeed_10m,precipitation`);
   const d = await r.json();
-  const i = d.hourly.time.length - 1;
+  const i = d.hourly.time.length-1;
+  return {
+    wind: d.hourly.windspeed_10m[i]*3.6,
+    pres: d.hourly.pressure_msl[i],
+    prec: d.hourly.precipitation[i]
+  };
+}
+function score(p){return Math.max(0,(REF-p.pres)*W_PRESS + p.wind*W_WIND + p.prec*W_PREC);}
 
-  let wind_kmh = d.hourly.wind_speed_10m[i] * 3.6;
-  let rain = d.hourly.precipitation[i];
-  let pressure = d.hourly.pressure_msl[i];
+async function updateA(){
+  const lat = parseFloat(latInput.value), lon = parseFloat(lonInput.value);
+  const p = await getPoint(lat,lon);
+  const s = score(p);
+  scoreA.textContent = s.toFixed(1);
+  barA.style.width = Math.min(s/200*100,100)+"%";
+  windA.textContent=`Wind: ${p.wind.toFixed(0)} km/h`;
+  presA.textContent=`Pressure: ${p.pres.toFixed(0)} hPa`;
+  precA.textContent=`Precip: ${p.prec.toFixed(1)} mm`;
+  metaA.textContent = (labelInput.value||`${lat},${lon}`) + " • updated " + new Date().toLocaleTimeString();
+}
+refreshA.onclick=updateA;
 
-  return (wind_kmh * 1.2) + (rain * 4) + ((1015 - pressure) * 0.8);
+// PANEL B update (regional average)
+const BOX={top:62.58,left:49.42,bottom:37.12,right:37.28};
+const grid=[];
+for(let i=0;i<5;i++)for(let j=0;j<5;j++){
+  grid.push({
+    lat: BOX.top - i*((BOX.top-BOX.bottom)/4),
+    lon: BOX.left - j*((BOX.left-BOX.right)/4)
+  });
+}
+async function updateB(){
+  const vals = await Promise.all(grid.map(p=>getPoint(p.lat,p.lon)));
+  const avg = vals.reduce((a,b)=>({wind:a.wind+b.wind,pres:a.pres+b.pres,prec:a.prec+b.prec}),
+                          {wind:0,pres:0,prec:0});
+  avg.wind/=vals.length; avg.pres/=vals.length; avg.prec/=vals.length;
+  const s = score(avg);
+  scoreB.textContent=s.toFixed(1);
+  barB.style.width=Math.min(s/200*100,100)+"%";
+  windB.textContent=`Avg Wind: ${avg.wind.toFixed(0)} km/h`;
+  presB.textContent=`Avg Pressure: ${avg.pres.toFixed(0)} hPa`;
+  precB.textContent=`Avg Precip: ${avg.prec.toFixed(1)} mm`;
 }
 
-async function updateScore() {
-  let scores = await Promise.all(points.map(p => fetchPointScore(p.lat, p.lon)));
-  let score = Math.max(0, Math.round(scores.reduce((a,b)=>a+b,0) / scores.length));
-
-  document.getElementById("score").textContent = score;
-
-  let cat = "Quiet", color = "#4DB6FF";
-  if (score > 30) { cat="Unsettled"; color="#00E676"; }
-  if (score > 60) { cat="Active"; color="#FFB300"; }
-  if (score > 90) { cat="Strong Storm"; color="#FB8C00"; }
-  if (score > 130) { cat="Severe"; color="#E53935"; }
-  if (score > 170) { cat="EXTREME"; color="#7B1FA2"; }
-
-  document.getElementById("category").textContent = cat;
-  document.getElementById("score").style.color = color;
-
-  let t = new Date().toLocaleTimeString();
-  chart.data.labels.push(t);
-  chart.data.datasets[0].data.push(score);
-  if (chart.data.labels.length > 20) {
-    chart.data.labels.shift();
-    chart.data.datasets[0].data.shift();
-  }
-  chart.update();
-}
-
-updateScore();
-setInterval(updateScore, 5*60*1000);
+// auto update both
+function tick(){updateA();updateB();}
+tick();
+setInterval(tick, 6*60*1000);
 </script>
-
 </body>
 </html>
